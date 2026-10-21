@@ -15,6 +15,7 @@ from aiogram.types import BotCommand
 from .config import load_config
 from .db import Database
 from .access_handlers import admin_router
+from .key_handlers import key_router
 from .handlers import AccessMiddleware, router
 from .service import AIService
 
@@ -33,6 +34,7 @@ async def main() -> None:
     await db.open()
     svc = AIService(cfg, db, data_dir / "files")
     await svc.load_access()
+    await svc.refresh_keys()
 
     session = AiohttpSession(proxy=cfg.tg_proxy) if cfg.tg_proxy else None
     bot = Bot(cfg.tg_token, session=session, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
@@ -49,6 +51,7 @@ async def main() -> None:
     dp = Dispatcher(svc=svc, config_path=config_path)
     dp.message.outer_middleware(AccessMiddleware(svc))
     dp.callback_query.outer_middleware(AccessMiddleware(svc))
+    dp.include_router(key_router)
     dp.include_router(admin_router)
     dp.include_router(router)
 
@@ -60,7 +63,8 @@ async def main() -> None:
         BotCommand(command="status", description="Модель и расход"),
         BotCommand(command="help", description="Справка"),
     ])
-    logging.info("Бот запущен, провайдеры: %s", ", ".join(cfg.providers))
+    active = svc.active_providers()
+    logging.info("Бот запущен, провайдеры с ключами: %s", ", ".join(active) or "нет — добавь через /keys")
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:

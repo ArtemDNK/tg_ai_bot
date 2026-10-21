@@ -28,6 +28,18 @@ CREATE TABLE IF NOT EXISTS access (
     added_by INTEGER,
     added_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS api_keys (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL,
+    key      TEXT NOT NULL,
+    name     TEXT,
+    rpm      INTEGER NOT NULL DEFAULT 0,
+    rpd      INTEGER NOT NULL DEFAULT 0,
+    tpd      INTEGER NOT NULL DEFAULT 0,
+    added_by INTEGER,
+    added_at REAL NOT NULL,
+    UNIQUE (provider, key)
+);
 CREATE TABLE IF NOT EXISTS usage (
     day      TEXT NOT NULL,
     scope    TEXT NOT NULL,      -- 'key' | 'user'
@@ -137,6 +149,33 @@ class Database:
 
     async def delete_access(self, user_id: int) -> bool:
         cur = await self.conn.execute("DELETE FROM access WHERE user_id=?", (user_id,))
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    # ── API-ключи, добавленные через бота ─────────────────────
+    async def list_keys(self) -> list[dict]:
+        async with self.conn.execute(
+            "SELECT id, provider, key, name, rpm, rpd, tpd FROM api_keys ORDER BY provider, id"
+        ) as cur:
+            cols = [c[0] for c in cur.description]
+            return [dict(zip(cols, r)) for r in await cur.fetchall()]
+
+    async def add_key(self, provider: str, key: str, name: str | None,
+                      rpm: int, rpd: int, tpd: int, added_by: int) -> bool:
+        cur = await self.conn.execute(
+            "INSERT OR IGNORE INTO api_keys(provider, key, name, rpm, rpd, tpd, added_by, added_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (provider, key, name, rpm, rpd, tpd, added_by, time.time()),
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    async def update_key_limits(self, key_id: int, rpm: int, rpd: int, tpd: int) -> None:
+        await self.conn.execute("UPDATE api_keys SET rpm=?, rpd=?, tpd=? WHERE id=?", (rpm, rpd, tpd, key_id))
+        await self.conn.commit()
+
+    async def delete_key(self, key_id: int) -> bool:
+        cur = await self.conn.execute("DELETE FROM api_keys WHERE id=?", (key_id,))
         await self.conn.commit()
         return cur.rowcount > 0
 

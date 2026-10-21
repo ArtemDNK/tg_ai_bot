@@ -56,19 +56,9 @@ else
     done
     [[ ${#ADMIN_ARGS[@]} -gt 0 ]] || die "Нужен хотя бы один ID админа"
 
-    echo
-    echo "API-ключи. Enter — пропустить провайдера. Несколько ключей — через пробел"
-    echo "(бот переключается на следующий, когда упирается в лимит)."
-    KEY_ARGS=()
-    for prov in openai anthropic gemini deepseek openrouter xai mistral groq qwen; do
-        read -rp "  $prov: " KEYS
-        for k in $KEYS; do KEY_ARGS+=(--key "$prov=$k"); done
-    done
-
     "$APP_DIR/.venv/bin/python" "$APP_DIR/scripts/setup_config.py" \
         --example "$APP_DIR/config.example.yaml" --out "$CONFIG" \
-        --token "$TG_TOKEN" "${ADMIN_ARGS[@]}" "${KEY_ARGS[@]}"
-    [[ ${#KEY_ARGS[@]} -gt 0 ]] || c_warn "Ключей нет — бот не запустится, пока не добавишь их в $CONFIG"
+        --token "$TG_TOKEN" "${ADMIN_ARGS[@]}"
 fi
 
 # ── 5. права ─────────────────────────────────────────────────
@@ -82,7 +72,7 @@ c_ok "Права выставлены (код — root, data/ — $APP_USER, con
 
 # ── 6. проверка конфига ──────────────────────────────────────
 if ! (cd "$APP_DIR" && runuser -u "$APP_USER" -- "$APP_DIR/.venv/bin/python" -c \
-        "from bot.config import load_config; c = load_config('$CONFIG'); print('Провайдеры:', ', '.join(c.providers))"); then
+        "from bot.config import load_config; load_config('$CONFIG'); print('Конфиг в порядке')"); then
     c_warn "Конфиг пока невалиден — поправь $CONFIG и выполни: sudo systemctl restart $SERVICE"
 fi
 
@@ -129,7 +119,8 @@ sleep 3
 
 echo
 if systemctl is-active --quiet "$SERVICE"; then
-    c_ok "Служба $SERVICE запущена. Напиши боту /start"
+    c_ok "Служба $SERVICE запущена."
+    echo "  Напиши боту /keys и добавь API-ключи нейросетей — дальше /model и можно общаться."
 else
     c_warn "Служба не запустилась. Последние строки лога:"
     journalctl -u "$SERVICE" -n 20 --no-pager || true

@@ -160,7 +160,7 @@ ADMIN_HELP = (
     "\n<b>Админ:</b>\n"
     "/users — кто имеет доступ\n"
     "/adduser <i>id [имя]</i> · /addadmin <i>id [имя]</i> · /deluser <i>id</i> · /block <i>id</i>\n"
-    "/keys — состояние ключей · /resetkeys — снять паузы · /reload — перечитать конфиг"
+    "/keys — API-ключи: добавить, удалить, лимиты, состояние · /reload — перечитать конфиг"
 )
 
 
@@ -217,7 +217,7 @@ async def cmd_status(message: Message, svc: AIService):
 # ── выбор модели ──────────────────────────────────────────────
 def providers_kb(svc: AIService, current: str) -> InlineKeyboardMarkup:
     rows, row = [], []
-    for name, p in svc.cfg.providers.items():
+    for name, p in svc.active_providers().items():
         row.append(InlineKeyboardButton(text=("✅ " if name == current else "") + p.title, callback_data=f"p:{name}"))
         if len(row) == 2:
             rows.append(row)
@@ -248,9 +248,17 @@ def models_kb(name: str, models: list[str], page: int, current: str | None) -> I
 async def cmd_model(message: Message, command: CommandObject, svc: AIService):
     uid = message.from_user.id
     if command.args:  # /model имя-модели — вручную, без списка
-        prov, _, _ = await svc.resolve(uid)
+        try:
+            prov, _, _ = await svc.resolve(uid)
+        except AIError as e:
+            await message.answer(f"⚠️ {html.escape(str(e))}")
+            return
         await svc.db.set_user(uid, provider=prov.name, model=command.args.strip())
         await message.answer(f"✅ {html.escape(prov.title)} · <code>{html.escape(command.args.strip())}</code>")
+        return
+    if not svc.active_providers():
+        await message.answer("API-ключей пока нет." + (" Добавь их: /keys" if is_admin(svc, uid) else
+                                                        " Попроси админа добавить."))
         return
     s = await svc.db.get_user(uid)
     await message.answer("Выбери провайдера:\n<i>(или <code>/model имя</code>, чтобы ввести модель вручную)</i>",
@@ -266,8 +274,8 @@ async def cb_providers(call: CallbackQuery, svc: AIService):
 
 
 async def _show_models(call: CallbackQuery, svc: AIService, name: str, page: int, force: bool = False):
-    if name not in svc.cfg.providers:
-        await call.answer("Провайдер пропал из конфига", show_alert=True)
+    if name not in svc.active_providers():
+        await call.answer("У провайдера больше нет ключей", show_alert=True)
         return
     await call.answer("Загружаю модели…" if force else None)
     models = await svc.get_models(name, force=force)
@@ -311,7 +319,7 @@ async def cb_model(call: CallbackQuery, svc: AIService):
     _, name, idx = call.data.split(":")
     models = await svc.get_models(name)
     idx = int(idx)
-    if name not in svc.cfg.providers or idx >= len(models):
+    if name not in svc.active_providers() or idx >= len(models):
         await call.answer("Список устарел, открой /model заново", show_alert=True)
         return
     model = models[idx]
@@ -328,37 +336,17 @@ async def cb_noop(call: CallbackQuery):
 
 
 # ── админ ─────────────────────────────────────────────────────
-@router.message(Command("keys"))
-async def cmd_keys(message: Message, svc: AIService):
-    if not is_admin(svc, message.from_user.id):
-        return
-    out = []
-    for prov in svc.cfg.providers.values():
-        out.append(f"<b>{html.escape(prov.title)}</b>")
-        out += await svc.pool.report(prov)
-        out.append("")
-    for chunk in split_markdown("\n".join(out)):
-        await message.answer(chunk)
-
-
-@router.message(Command("resetkeys"))
-async def cmd_resetkeys(message: Message, command: CommandObject, svc: AIService):
-    if not is_admin(svc, message.from_user.id):
-        return
-    svc.pool.reset_cooldowns(command.args.strip() if command.args else None)
-    await message.answer("✅ Паузы ключей сняты.")
-
-
 @router.message(Command("reload"))
 async def cmd_reload(message: Message, svc: AIService, config_path: Path):
     if not is_admin(svc, message.from_user.id):
         return
     try:
-        svc.reload(load_config(config_path))
+        await svc.reload(load_config(config_path))
     except Exception as e:  # noqa: BLE001
         await message.answer(f"❌ Конфиг не загружен: {html.escape(str(e))}")
         return
-    await message.answer(f"✅ Конфиг перечитан. Провайдеров: {len(svc.cfg.providers)}")
+    await message.answer(f"✅ Конфиг перечитан. Провайдеров с ключами: {len(svc.active_providers())} "
+                         f"из {len(svc.cfg.providers)}")
 
 
 # ── входящие сообщения ────────────────────────────────────────

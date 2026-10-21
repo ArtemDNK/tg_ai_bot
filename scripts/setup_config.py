@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Создаёт config.yaml из config.example.yaml, сохраняя комментарии.
 
-  setup_config.py --token 123:ABC --admin 111111111 --key openai=sk-... --key gemini=AIza... \
-                  [--example config.example.yaml] [--out config.yaml]
+  setup_config.py --token 123:ABC --admin 111111111 [--example config.example.yaml] [--out config.yaml]
+
+API-ключи обычно добавляются из бота (/keys); --key provider=KEY оставлен для автоматизации.
 """
 from __future__ import annotations
 

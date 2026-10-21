@@ -1,6 +1,7 @@
 """Пул API-ключей: ротация по порядку, локальные лимиты и откат при ошибках API."""
 from __future__ import annotations
 
+import html
 import logging
 import time
 from collections import deque
@@ -148,6 +149,13 @@ class KeyPool:
                 st.cooldown_until = 0
 
     # ── отчёт для /keys ───────────────────────────────────────
+    async def summary(self, prov: ProviderConfig) -> tuple[int, int]:
+        """(всего ключей, из них сейчас недоступны)."""
+        await self._ensure_day(prov.name)
+        now = time.time()
+        lst = self.states.get(prov.name, [])
+        return len(lst), sum(1 for st in lst if self._blocked(st, now) is not None)
+
     async def report(self, prov: ProviderConfig) -> list[str]:
         await self._ensure_day(prov.name)
         now = time.time()
@@ -158,7 +166,8 @@ class KeyPool:
             status = "🟢" if blocked is None else f"🔴 {blocked[1]}, ещё {fmt_wait(blocked[0])}"
             lim = lambda used, cap: f"{used}/{cap}" if cap else f"{used}"
             lines.append(
-                f"{i}. {c.name} <code>{c.masked}</code> — {status}\n"
+                f"{i}. {html.escape(c.name)} <code>{html.escape(c.masked)}</code>"
+                f"{'' if c.db_id else ' · config.yaml'} — {status}\n"
                 f"   мин: {lim(len(st.recent), c.rpm)} · сутки: {lim(st.req_today, c.rpd)} req, "
                 f"{lim(st.tok_today, c.tpd)} tok"
             )

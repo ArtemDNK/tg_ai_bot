@@ -17,6 +17,7 @@ class KeyConfig:
     rpm: int = 0
     rpd: int = 0
     tpd: int = 0
+    db_id: int | None = None   # задан, если ключ добавлен через бота (иначе — из config.yaml)
 
     @property
     def id(self) -> str:
@@ -160,9 +161,8 @@ def load_config(path: str | Path) -> Config:
         ptype = p.get("type", "openai")
         if ptype not in PROVIDER_TYPES:
             raise ValueError(f"Провайдер {name}: неизвестный type={ptype}")
+        # ключи можно не указывать — их добавляют из бота (/keys)
         keys = [_parse_key(k, i) for i, k in enumerate(p.get("keys") or [])]
-        if not keys:
-            continue  # провайдер без ключей просто не показываем
         providers[name] = ProviderConfig(
             name=name,
             title=p.get("title") or name,
@@ -178,7 +178,7 @@ def load_config(path: str | Path) -> Config:
             proxy=p["proxy"] if "proxy" in p else ai_proxy,
         )
     if not providers:
-        raise ValueError("Нет ни одного провайдера с ключами")
+        raise ValueError("В конфиге нет ни одного провайдера (секция providers)")
 
     default_provider = defaults.get("provider") or next(iter(providers))
     if default_provider not in providers:

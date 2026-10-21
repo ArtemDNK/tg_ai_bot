@@ -1,6 +1,7 @@
 """Ядро: история, выбор провайдера/модели, ротация ключей, лимиты пользователей."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import mimetypes
 import shutil
@@ -10,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable, TypeVar
 
-from .config import Config, ProviderConfig
+from .config import Config, KeyConfig, ProviderConfig
 from .db import Database
 from .errors import ErrorKind, classify, short_error
 from .keypool import KeyPool, NoKeyAvailable, fmt_wait
@@ -46,6 +47,7 @@ class AIService:
         self._models: dict[str, tuple[float, list[str]]] = {}
         self.on_key_auth_error: Callable[[str], Awaitable[None]] | None = None
         self.access: dict[int, AccessEntry] = {}
+        self._config_keys = {n: list(p.keys) for n, p in cfg.providers.items()}
 
     async def load_access(self) -> None:
         self.access = {uid: AccessEntry(role, name) for uid, role, name in await self.db.list_access()}
@@ -87,11 +89,59 @@ class AIService:
         self.access.pop(user_id, None)
         return await self.db.delete_access(user_id)
 
-    def reload(self, cfg: Config) -> None:
+    async def reload(self, cfg: Config) -> None:
         self.cfg = cfg
-        self.pool.apply_config(cfg)
+        self._config_keys = {n: list(p.keys) for n, p in cfg.providers.items()}
         self.factory.timeout = cfg.request_timeout
         self._models.clear()
+        await self.refresh_keys()
+
+    # ── API-ключи: config.yaml + добавленные через бота ───────
+    async def refresh_keys(self) -> None:
+        """Собирает ключи провайдеров: сначала из конфига, затем из БД (в порядке добавления)."""
+        db_keys: dict[str, list[KeyConfig]] = {}
+        for row in await self.db.list_keys():
+            db_keys.setdefault(row["provider"], []).append(KeyConfig(
+                key=row["key"], name=row["name"] or f"#{row['id']}", rpm=row["rpm"], rpd=row["rpd"],
+                tpd=row["tpd"], db_id=row["id"]))
+        for name, prov in self.cfg.providers.items():
+            base = self._config_keys.get(name, [])
+            seen = {k.key for k in base}
+            had_keys = bool(prov.keys)
+            prov.keys = base + [k for k in db_keys.get(name, []) if k.key not in seen]
+            if prov.keys and not had_keys:
+                self._models.pop(name, None)  # раньше список моделей не получить было нечем
+        self.pool.apply_config(self.cfg)
+
+    def active_providers(self) -> dict[str, ProviderConfig]:
+        return {n: p for n, p in self.cfg.providers.items() if p.keys}
+
+    async def add_key(self, provider: str, key: str, name: str | None,
+                      rpm: int, rpd: int, tpd: int, by: int) -> bool:
+        if any(k.key == key for k in self.cfg.providers[provider].keys):
+            return False
+        added = await self.db.add_key(provider, key, name, rpm, rpd, tpd, by)
+        await self.refresh_keys()
+        return added
+
+    async def delete_key(self, key_id: int) -> bool:
+        ok = await self.db.delete_key(key_id)
+        await self.refresh_keys()
+        return ok
+
+    async def set_key_limits(self, key_id: int, rpm: int, rpd: int, tpd: int) -> None:
+        await self.db.update_key_limits(key_id, rpm, rpd, tpd)
+        await self.refresh_keys()
+
+    async def test_key(self, provider: str, key: str) -> tuple[ErrorKind, str] | None:
+        """Пробный запрос списка моделей. None — ключ рабочий, иначе (вид ошибки, текст)."""
+        prov = self.cfg.providers[provider]
+        client = self.factory.get(prov, key)
+        try:
+            await asyncio.wait_for(client.list_models(), timeout=30)
+            return None
+        except Exception as e:  # noqa: BLE001
+            return classify(e)[0], short_error(e) or type(e).__name__
 
     # ── файлы пользователя ────────────────────────────────────
     def save_file(self, user_id: int, data: bytes, ext: str) -> str:
@@ -108,7 +158,10 @@ class AIService:
     # ── настройки пользователя ────────────────────────────────
     async def resolve(self, user_id: int) -> tuple[ProviderConfig, str, str]:
         s = await self.db.get_user(user_id)
-        prov = self.cfg.providers.get(s.provider or "") or self.cfg.providers[self.cfg.default_provider]
+        active = self.active_providers()
+        if not active:
+            raise AIError("API-ключей пока нет. Админ добавляет их командой /keys")
+        prov = active.get(s.provider or "") or active.get(self.cfg.default_provider) or next(iter(active.values()))
         model = s.model if s.provider == prov.name and s.model else None
         if not model:
             if prov.name == self.cfg.default_provider and self.cfg.default_model:
@@ -239,7 +292,7 @@ class AIService:
         await self.check_limits(user_id, image=True)
         prov, _, _ = await self.resolve(user_id)
         if not prov.image_model:
-            candidates = [p for p in self.cfg.providers.values() if p.image_model]
+            candidates = [p for p in self.active_providers().values() if p.image_model]
             if not candidates:
                 raise AIError("Ни у одного провайдера не задан image_model в конфиге")
             prov = candidates[0]
@@ -266,13 +319,17 @@ class AIService:
     # ── распознавание речи ────────────────────────────────────
     async def transcribe(self, user_id: int, data: bytes, filename: str, mime: str) -> str:
         tc = self.cfg.transcription
-        if not tc.enabled:
-            raise AIError("Распознавание голосовых не настроено (секция transcription в конфиге)")
+        if not tc.enabled or not any(self.cfg.providers[e.provider].keys for e in tc.engines
+                                     if e.provider in self.cfg.providers):
+            names = ", ".join(dict.fromkeys(self.cfg.providers[e.provider].title for e in tc.engines
+                                           if e.provider in self.cfg.providers)) or "—"
+            raise AIError(f"Голосовые распознавать нечем: нужен ключ одного из провайдеров ({names}). "
+                          "Админ добавляет ключи через /keys")
         await self.check_limits(user_id)
         errors = []
         for eng in tc.engines:
             prov = self.cfg.providers.get(eng.provider)
-            if not prov:
+            if not prov or not prov.keys:
                 continue
             try:
                 text, _ = await self.run_with_keys(
