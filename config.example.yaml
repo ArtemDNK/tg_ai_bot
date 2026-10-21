@@ -1,0 +1,160 @@
+# ─────────────────────────────────────────────────────────────
+#  AI TG Bot — конфигурация
+#  Скопируй в config.yaml и заполни. /reload (админ) перечитывает
+#  файл без перезапуска.
+# ─────────────────────────────────────────────────────────────
+
+telegram:
+  token: "123456:ABC..."            # токен от @BotFather
+  proxy: null                       # "socks5://user:pass@host:1080" или "http://host:3128"
+
+# Главные админы задаются здесь (install.sh спросит ID). Остальных пользователей
+# и админов добавляй прямо из бота: /adduser, /addadmin, /deluser, /block —
+# или кнопками в заявке, которая приходит, когда незнакомец пишет боту.
+access:
+  admins: [111111111]               # Telegram user_id главных админов
+  allowed_users: []                 # необязательно: доступ через конфиг
+  allow_all: false                  # true — пускать всех (кроме /block)
+
+# Лимиты на пользователя (админы не ограничены)
+user_limits:
+  default:
+    messages_per_day: 200           # 0 = без ограничений
+    tokens_per_day: 0
+    images_per_day: 20
+  overrides:                        # индивидуальные лимиты по user_id
+    # 222222222: {messages_per_day: 1000, tokens_per_day: 0, images_per_day: 100}
+
+# Часовой пояс для сброса суточных счётчиков (ключей и пользователей)
+limits_timezone: "Asia/Krasnoyarsk"
+
+defaults:
+  provider: openai
+  model: null                       # null — default_model провайдера
+  system_prompt: "Ты полезный ассистент. Отвечай на языке пользователя."
+
+history:
+  max_messages: 30                  # сколько последних сообщений отправлять в контекст
+  max_images: 4                     # сколько последних картинок держать в контексте
+  max_file_chars: 200000            # обрезка текста из присланных файлов
+
+# Распознавание голосовых, кружков и аудиофайлов.
+# Движки пробуются по порядку (у каждого своя ротация ключей).
+# Если секция не задана — берутся groq → openai → gemini, какие есть в providers.
+transcription:
+  enabled: true
+  language: ru                      # подсказка языка, можно null
+  show_text: true                   # показывать расшифровку в чате
+  engines:
+    - provider: groq
+      model: whisper-large-v3-turbo
+    - provider: openai
+      model: gpt-4o-mini-transcribe
+    - provider: gemini
+      model: gemini-2.5-flash
+
+# Прокси для всех запросов к нейросетям (можно переопределить в провайдере)
+ai_proxy: null
+request_timeout: 300
+
+# ─────────────────────────────────────────────────────────────
+#  Провайдеры.
+#  type: openai     — OpenAI и всё, что совместимо с OpenAI API
+#        anthropic  — Claude
+#        gemini     — Google Gemini (AI Studio)
+#
+#  keys: список ключей. Используются по порядку: бот сидит на
+#  первом рабочем ключе, а когда тот упирается в лимит (свой из
+#  конфига или 429/квоту от API) — переходит на следующий.
+#  Ключ можно указать строкой или объектом с лимитами:
+#    - key: "sk-..."
+#      name: "основной"   # подпись в /keys
+#      rpm: 60            # запросов в минуту
+#      rpd: 1000          # запросов в сутки
+#      tpd: 1000000       # токенов в сутки
+#  0 или отсутствие поля = без ограничения.
+#
+#  models: если не указан — список моделей тянется из API.
+#  params: доп. параметры запроса (temperature, max_tokens, ...).
+# ─────────────────────────────────────────────────────────────
+providers:
+
+  openai:
+    title: "OpenAI"
+    type: openai
+    keys: []                        # пример: ["sk-proj-AAA", "sk-proj-BBB"]
+    default_model: "gpt-5-mini"
+    image_model: "gpt-image-1"      # для /img
+    native_pdf: true                # отправлять PDF как файл, а не только текстом
+    model_exclude: "embedding|tts|whisper|moderation|dall-e|audio|realtime|transcribe|search|image|codex|instruct|babbage|davinci|computer-use|sora"
+
+  anthropic:
+    title: "Anthropic Claude"
+    type: anthropic
+    keys: []
+    default_model: "claude-sonnet-4-5"
+    native_pdf: true
+    params:
+      max_tokens: 8192
+
+  gemini:
+    title: "Google Gemini"
+    type: gemini
+    keys: []                        # бесплатные ключи лучше с лимитами: - {key: "AIza...", rpm: 10, rpd: 250}
+    default_model: "gemini-2.5-flash"
+    image_model: "gemini-2.5-flash-image"   # или imagen-4.0-generate-001
+    native_pdf: true
+    model_exclude: "embedding|aqa|tts|live|native-audio|veo|imagen"
+
+  deepseek:
+    title: "DeepSeek"
+    type: openai
+    base_url: "https://api.deepseek.com"
+    keys: []
+    default_model: "deepseek-chat"
+
+  openrouter:
+    title: "OpenRouter"
+    type: openai
+    base_url: "https://openrouter.ai/api/v1"
+    keys: []
+    default_model: "openai/gpt-5-mini"
+    image_model: "google/gemini-2.5-flash-image"
+
+  xai:
+    title: "xAI Grok"
+    type: openai
+    base_url: "https://api.x.ai/v1"
+    keys: []
+    default_model: "grok-4"
+
+  mistral:
+    title: "Mistral"
+    type: openai
+    base_url: "https://api.mistral.ai/v1"
+    keys: []
+    default_model: "mistral-large-latest"
+
+  groq:
+    title: "Groq"
+    type: openai
+    base_url: "https://api.groq.com/openai/v1"
+    keys: []
+    default_model: "llama-3.3-70b-versatile"
+    model_exclude: "whisper|tts|guard"
+
+  qwen:
+    title: "Qwen (DashScope)"
+    type: openai
+    base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+    keys: []
+    default_model: "qwen-plus"
+
+  # Локальный Ollama / LM Studio / vLLM — тоже OpenAI-совместимые
+  # ollama:
+  #   title: "Ollama"
+  #   type: openai
+  #   base_url: "http://127.0.0.1:11434/v1"
+  #   keys: ["ollama"]
+  #   default_model: "qwen2.5:14b"
+  #   proxy: null

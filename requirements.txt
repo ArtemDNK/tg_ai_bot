@@ -1,0 +1,11 @@
+aiogram
+aiohttp-socks
+openai
+anthropic
+google-genai
+httpx[socks]
+aiosqlite
+pyyaml
+pypdf
+python-docx
+openpyxl
